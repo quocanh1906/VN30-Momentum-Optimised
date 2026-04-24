@@ -17,5 +17,8 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
+# Claude Code session state
+.claude/
+
 # Generated artefacts
 output/
