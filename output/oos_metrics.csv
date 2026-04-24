@@ -1,0 +1,5 @@
+method,ann_return,ann_vol,sharpe,max_dd,calmar,n_weeks
+equal,5.56,16.18,0.344,-32.61,0.17,309
+signal,4.69,17.48,0.268,-38.95,0.12,309
+vol_adjusted,7.07,16.8,0.421,-34.54,0.205,309
+mean_variance,7.63,18.76,0.407,-40.76,0.187,309
