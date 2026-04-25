@@ -44,7 +44,8 @@ from data          import MARKET_ETF
 
 
 # ── Global assumptions (edit here if cost model changes) ──────────
-TXN_COST_RATE = 0.0015   # 0.15% flat, symmetric buy/sell
+TXN_COST_RATE   = 0.0015         # 0.15% flat, symmetric buy/sell
+INITIAL_CAPITAL = 1_000_000_000  # 1 bn VND notional for absolute amounts
 
 
 # ── Configure the strategy to inspect ─────────────────────────────
@@ -222,55 +223,71 @@ def plot_holdings_stacked_area(scaled_w, save_path, title, top_n=15):
     plt.close(fig)
 
 
-def compute_ticker_summary(scaled_w, weekly_returns):
+def compute_ticker_summary(scaled_w, closes_weekly, initial_capital):
     """
     Per-ticker lifetime statistics across the backtest.
-    Contribution = w.shift(1) × weekly_return, so it attributes the
-    PnL earned in week t to the weight that decided the holding at t-1.
-    GROSS (costs are a portfolio-level concern and not attributed here).
+
+    contrib[t, i] = w[t, i] × return_from_t_to_t+1 — PnL realised from
+    holding stock i across week t (forward-shifted convention, matches
+    portfolio.py). Lifetime sum gives gross % contribution to NAV;
+    absolute amount uses actual NAV trajectory at each week.
     """
-    w       = scaled_w.fillna(0)
-    contrib = w.shift(1).fillna(0) * weekly_returns
+    w        = scaled_w.fillna(0)
+    ret_fwd  = closes_weekly.pct_change(1).shift(-1).reindex(w.index)
+    contrib  = w * ret_fwd
+    port_ret = contrib.sum(axis=1).fillna(0)
+    nav_end  = initial_capital * (1 + port_ret).cumprod()
+    nav_at_t = nav_end.shift(1).fillna(initial_capital)
+
     rows = []
     for ticker in w.columns:
         weights = w[ticker]
         held    = weights > 1e-9
-        if not held.any():
+        if not held.any() or ticker not in contrib.columns:
             continue
-        c        = contrib[ticker] if ticker in contrib.columns else pd.Series(dtype=float)
+        c        = contrib[ticker].fillna(0)
+        c_abs    = c * nav_at_t
         dates    = weights.index
         idx_held = np.where(held.values)[0]
 
         rows.append({
-            "ticker"                : ticker,
-            "first_held"            : dates[idx_held[0]].date(),
-            "last_held"             : dates[idx_held[-1]].date(),
-            "weeks_held"            : int(held.sum()),
-            "avg_weight_when_held"  : round(float(weights[held].mean()), 4),
-            "max_weight"            : round(float(weights.max()), 4),
-            "total_pnl_contrib"     : round(float(c.sum()), 5),
-            "best_weekly_contrib"   : round(float(c.max()), 5),
-            "worst_weekly_contrib"  : round(float(c.min()), 5),
-            "hit_rate_when_held"    : round(
+            "ticker"               : ticker,
+            "first_held"           : dates[idx_held[0]].date(),
+            "last_held"            : dates[idx_held[-1]].date(),
+            "weeks_held"           : int(held.sum()),
+            "avg_weight_when_held" : round(float(weights[held].mean()), 4),
+            "max_weight"           : round(float(weights.max()), 4),
+            "pnl_pct"              : round(float(c.sum()), 5),
+            "pnl_abs"              : round(float(c_abs.sum()), 0),
+            "best_weekly_pct"      : round(float(c.max()), 5),
+            "worst_weekly_pct"     : round(float(c.min()), 5),
+            "hit_rate_when_held"   : round(
                 float((c > 0).sum() / max((c != 0).sum(), 1)), 3),
         })
     return (pd.DataFrame(rows)
-            .sort_values("total_pnl_contrib", ascending=False)
+            .sort_values("pnl_abs", ascending=False)
             .reset_index(drop=True))
 
 
-def compute_position_events(scaled_w, weekly_returns):
+def compute_position_events(scaled_w, closes_weekly, initial_capital):
     """
     One row per contiguous holding episode (weight > 0).
-    Gives entry/exit dates, duration, avg/max weight, and GROSS PnL
-    earned across the episode.
+
+    Forward-shifted return convention so PnL realised across week t
+    is attributed to the weight at week t. Episode = weeks
+    [start..end]; first week of realised PnL is week start.
     """
-    w       = scaled_w.fillna(0)
-    contrib = w.shift(1).fillna(0) * weekly_returns
+    w        = scaled_w.fillna(0)
+    ret_fwd  = closes_weekly.pct_change(1).shift(-1).reindex(w.index)
+    contrib  = w * ret_fwd
+    port_ret = contrib.sum(axis=1).fillna(0)
+    nav_end  = initial_capital * (1 + port_ret).cumprod()
+    nav_at_t = nav_end.shift(1).fillna(initial_capital)
+
     rows = []
     for ticker in w.columns:
         held  = (w[ticker] > 1e-9).values
-        if not held.any():
+        if not held.any() or ticker not in contrib.columns:
             continue
         dates = w.index
         n     = len(held)
@@ -283,21 +300,107 @@ def compute_position_events(scaled_w, weekly_returns):
             while i < n and held[i]:
                 i += 1
             end = i - 1
-            ep_w = w[ticker].iloc[start:end+1]
-            ep_c = contrib[ticker].iloc[start:end+1] \
-                if ticker in contrib.columns else pd.Series([0.0])
+
+            ep_w   = w[ticker].iloc[start:end+1]
+            ep_c   = contrib[ticker].iloc[start:end+1].fillna(0)
+            ep_nav = nav_at_t.iloc[start:end+1]
+
+            entry_date = dates[start]
+            exit_date  = dates[end]
+
+            # Stock's own return entry-close → next-week-close (price
+            # at which the position is unwound at the next rebalance).
+            try:
+                p_entry  = closes_weekly[ticker].loc[entry_date]
+                idx_exit = closes_weekly.index.get_loc(exit_date)
+                p_exit   = closes_weekly[ticker].iloc[
+                    min(idx_exit + 1, len(closes_weekly) - 1)
+                ]
+                stock_ret = p_exit / p_entry - 1
+            except (KeyError, IndexError):
+                stock_ret = float("nan")
+
             rows.append({
-                "ticker"      : ticker,
-                "entry_date"  : dates[start].date(),
-                "exit_date"   : dates[end].date(),
-                "weeks_held"  : end - start + 1,
-                "avg_weight"  : round(float(ep_w.mean()), 4),
-                "max_weight"  : round(float(ep_w.max()), 4),
-                "total_pnl"   : round(float(ep_c.sum()), 5),
+                "ticker"            : ticker,
+                "entry_date"        : entry_date.date(),
+                "exit_date"         : exit_date.date(),
+                "weeks_held"        : end - start + 1,
+                "avg_weight"        : round(float(ep_w.mean()), 4),
+                "max_weight"        : round(float(ep_w.max()), 4),
+                "stock_return_pct"  : (round(float(stock_ret), 4)
+                                       if stock_ret == stock_ret else None),
+                "pnl_pct"           : round(float(ep_c.sum()), 5),
+                "pnl_abs"           : round(float((ep_c * ep_nav).sum()), 0),
             })
     return (pd.DataFrame(rows)
             .sort_values(["entry_date", "ticker"])
             .reset_index(drop=True))
+
+
+def compute_weekly_pnl_table(scaled_w, closes_weekly, opens_weekly,
+                              cost_rate, initial_capital):
+    """
+    Weekly portfolio PnL with %, absolute, and cost columns.
+
+    Uses portfolio.py's compute_portfolio_returns for gross/net/turnover
+    (Friday signal → Monday open execution model). Absolute amounts are
+    based on the actual net-of-cost NAV trajectory.
+    """
+    weekly_net, weekly_gross, turnover = compute_portfolio_returns(
+        scaled_w, closes_weekly, opens_weekly,
+        cost_rate_buy  = cost_rate,
+        cost_rate_sell = cost_rate,
+    )
+    weekly_gross = weekly_gross.fillna(0)
+    weekly_net   = weekly_net.fillna(0)
+    cost_pct     = weekly_gross - weekly_net
+
+    nav_end   = initial_capital * (1 + weekly_net).cumprod()
+    nav_start = nav_end.shift(1).fillna(initial_capital)
+
+    df = pd.DataFrame({
+        "gross_return_pct"     : weekly_gross.round(6),
+        "transaction_cost_pct" : cost_pct.round(6),
+        "net_return_pct"       : weekly_net.round(6),
+        "turnover"             : turnover.round(4),
+        "nav_start"            : nav_start.round(0),
+        "gross_pnl_abs"        : (nav_start * weekly_gross).round(0),
+        "transaction_cost_abs" : (nav_start * cost_pct).round(0),
+        "net_pnl_abs"          : (nav_start * weekly_net).round(0),
+        "nav_end"              : nav_end.round(0),
+    })
+    df.index.name = "date"
+    return df
+
+
+def aggregate_pnl(weekly_df, freq):
+    """
+    Aggregate the weekly PnL table to monthly ('ME') or yearly ('YE').
+
+    Percent columns compound: (1+r).prod() − 1.
+    Absolute columns sum (each week's amount is on actual NAV at the time).
+    NAV start/end = first/last on the actual net trajectory in the period.
+    """
+    g            = weekly_df.resample(freq)
+    gross_pct    = g["gross_return_pct"].apply(lambda x: (1 + x).prod() - 1)
+    net_pct      = g["net_return_pct"  ].apply(lambda x: (1 + x).prod() - 1)
+    cost_pct     = gross_pct - net_pct
+    nav_start    = g["nav_start"].first()
+    nav_end      = g["nav_end"  ].last()
+
+    df = pd.DataFrame({
+        "gross_return_pct"     : gross_pct.round(6),
+        "transaction_cost_pct" : cost_pct.round(6),
+        "net_return_pct"       : net_pct.round(6),
+        "turnover_total"       : g["turnover"].sum().round(4),
+        "nav_start"            : nav_start.round(0),
+        "gross_pnl_abs"        : g["gross_pnl_abs"       ].sum().round(0),
+        "transaction_cost_abs" : g["transaction_cost_abs"].sum().round(0),
+        "net_pnl_abs"          : (nav_end - nav_start).round(0),
+        "nav_end"              : nav_end.round(0),
+    })
+    df.index.name = "period"
+    return df
 
 
 def make_cost_impact_chart(gross_pnl, net_pnl, bench_eq,
@@ -522,17 +625,35 @@ def main():
     )
 
     # --- per-ticker lifetime summary ---
-    weekly_returns_al = bundle["closes_weekly"].pct_change().reindex(
-        scaled_w.index
+    ticker_summary = compute_ticker_summary(
+        scaled_w, bundle["closes_weekly"], INITIAL_CAPITAL
     )
-    ticker_summary = compute_ticker_summary(scaled_w, weekly_returns_al)
     ticker_summary_path = f"{out_dir}/{slug}_ticker_summary.csv"
     ticker_summary.to_csv(ticker_summary_path, index=False)
 
-    # --- position-episode events ---
-    position_events = compute_position_events(scaled_w, weekly_returns_al)
-    position_events_path = f"{out_dir}/{slug}_position_events.csv"
+    # --- position-episode events (per ticker, per holding period) ---
+    position_events = compute_position_events(
+        scaled_w, bundle["closes_weekly"], INITIAL_CAPITAL
+    )
+    position_events_path = f"{out_dir}/{slug}_pnl_per_position.csv"
     position_events.to_csv(position_events_path, index=False)
+
+    # --- weekly portfolio PnL table (gross/cost/net %, abs, NAV) ---
+    weekly_pnl = compute_weekly_pnl_table(
+        scaled_w, bundle["closes_weekly"], bundle.get("opens_weekly"),
+        cost_rate       = TXN_COST_RATE,
+        initial_capital = INITIAL_CAPITAL,
+    )
+    weekly_pnl_path = f"{out_dir}/{slug}_pnl_weekly_table.csv"
+    weekly_pnl.to_csv(weekly_pnl_path)
+
+    # --- monthly + yearly aggregates with same column structure ---
+    monthly_pnl = aggregate_pnl(weekly_pnl, "ME")
+    yearly_pnl  = aggregate_pnl(weekly_pnl, "YE")
+    monthly_pnl_path = f"{out_dir}/{slug}_pnl_monthly_table.csv"
+    yearly_pnl_path  = f"{out_dir}/{slug}_pnl_yearly_table.csv"
+    monthly_pnl.to_csv(monthly_pnl_path)
+    yearly_pnl.to_csv(yearly_pnl_path)
 
     # --- rolling Sharpe (1-year window) ---
     rolling_sharpe_path = f"{out_dir}/{slug}_rolling_sharpe.png"
@@ -596,14 +717,31 @@ def main():
     print(f"  {holdings_chart_path}")
     print(f"  {ticker_summary_path}")
     print(f"  {position_events_path}")
+    print(f"  {weekly_pnl_path}")
+    print(f"  {monthly_pnl_path}")
+    print(f"  {yearly_pnl_path}")
     print(f"  {rolling_sharpe_path}")
 
-    print(f"\nTop 10 tickers by total PnL contribution (gross):")
-    print(ticker_summary.head(10).to_string(index=False))
+    print(f"\nNotional capital: {INITIAL_CAPITAL:,.0f} VND")
+
+    print(f"\nTop 10 tickers by absolute PnL contribution (gross of cost):")
+    cols = ["ticker", "weeks_held", "avg_weight_when_held",
+            "pnl_pct", "pnl_abs", "hit_rate_when_held"]
+    print(ticker_summary.head(10)[cols].to_string(index=False))
 
     print(f"\nPosition episodes: {len(position_events)} total "
-          f"(avg duration {position_events['weeks_held'].mean():.1f} weeks, "
+          f"(avg {position_events['weeks_held'].mean():.1f} weeks, "
           f"median {position_events['weeks_held'].median():.0f} weeks)")
+    print(f"\nTop 5 episodes by absolute PnL:")
+    print(position_events.nlargest(5, "pnl_abs").to_string(index=False))
+
+    print(f"\nYearly PnL summary:")
+    yr_show = yearly_pnl.copy()
+    yr_show.index = yr_show.index.year
+    print(yr_show[["gross_return_pct", "transaction_cost_pct",
+                   "net_return_pct", "gross_pnl_abs",
+                   "transaction_cost_abs", "net_pnl_abs",
+                   "nav_end"]].to_string())
 
     # Sneak preview of recent holdings
     print(f"\nLatest portfolio ({positions['date'].max().date()}):")

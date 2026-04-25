@@ -242,14 +242,36 @@ Requiring every signal to be positive collapses the long book too aggressively. 
 
 All strategies with non-trivial Sharpe still clear the benchmark after 15 bps costs. The 4-way leader's Sharpe drops from 1.47 gross to 1.35 net — meaningful but not decisive. The ranking is stable across gross and net.
 
-### 5. Concentration: two names drive ~60% of gross PnL
+### 5. Concentration: two names drive most of the absolute P&L
 
-Top contributors by gross PnL:
-- **VIC**: +31.8% total, 165 weeks held
-- **HPG**: +29.5% total, 243 weeks held
-- Top 10 names account for ~80% of gross PnL
+On a 1 bn VND notional, the top 10 contributors by **absolute** P&L (gross):
 
-The strategy is genuinely concentrated in a few high-momentum names with long runs. Median position duration: 4 weeks. Mean: 9.4 weeks. 532 distinct holding episodes over 10 years.
+| Ticker | Weeks held | Avg wt when held | P&L % | P&L (VND) | Hit rate |
+|---|---:|---:|---:|---:|---:|
+| **VIC** | 165 | 9.1% | +31.8% | **+1.74 bn** | 59% |
+| **HPG** | 243 | 8.1% | +29.5% | +768 m | 59% |
+| SSI | 194 | 5.6% | +14.7% | +526 m | 60% |
+| FPT | 276 | 7.4% | +14.7% | +521 m | 58% |
+| VHM | 81 | 5.7% | +6.0% | +383 m | 51% |
+| PDR | 46 | 9.5% | +9.8% | +383 m | 59% |
+| MBB | 267 | 5.6% | +10.2% | +312 m | 52% |
+| REE | 117 | 10.4% | +14.0% | +296 m | 60% |
+| SHB | 59 | 8.2% | +4.3% | +241 m | 63% |
+| TCB | 126 | 5.1% | +5.1% | +231 m | 61% |
+
+Top 2 names (VIC + HPG) account for ~40% of cumulative gross P&L. Top 10 ~80%. The strategy is genuinely concentrated in a few high-momentum names with long runs. Median position duration: 4 weeks. Mean: 9.4 weeks. **532 distinct holding episodes** over 10 years.
+
+**Top 5 single episodes by absolute P&L** (entered, held, exited as one continuous position):
+
+| Ticker | Entry | Exit | Weeks | Avg wt | Stock return | P&L % | P&L (VND) |
+|---|---|---|---:|---:|---:|---:|---:|
+| VIC | 2025-03-14 | 2026-04-24 | 59 | 11.0% | +722% | +24.7% | **+1.61 bn** |
+| HPG | 2020-04-03 | 2021-07-02 | 66 | 10.9% | +345% | +17.9% | +551 m |
+| VHM | 2025-03-28 | 2026-01-23 | 44 | 6.8% | +107% | +7.2% | +410 m |
+| SSI | 2020-09-04 | 2022-02-04 | 75 | 6.1% | +335% | +11.9% | +394 m |
+| PDR | 2021-01-01 | 2021-09-10 | 37 | 11.4% | +91% | +9.8% | +380 m |
+
+The single VIC ride from March 2025 onward (held continuously for 59 weeks while VIC rallied >700%) is responsible for ~25% of the entire backtest's net P&L.
 
 ### 6. Fat-tailed but clipped on both sides
 
@@ -277,7 +299,29 @@ Causes: ~500 weekly observations, ~12 features, a correctable-but-not-corrected 
 
 The **rules-based filter benchmark beats the ML version** OOS. Revisiting the ML path requires new data (foreign flows, USD/VND) before adding complexity.
 
-### 8. Holiday-gap NaN pollution discovered and fixed
+### 8. Year-by-year P&L breakdown (1 bn VND notional)
+
+Same column structure exists at weekly and monthly resolution in `output/detail/*_pnl_weekly_table.csv` and `*_pnl_monthly_table.csv`.
+
+| Year | Gross % | Cost % | Net % | Gross VND | Cost VND | Net VND | NAV end |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2016 | +42.6% | 3.4% | +39.2% | +422 m | 30 m | +392 m | 1.39 bn |
+| 2017 | +58.0% | 2.9% | **+55.2%** | +798 m | 31 m | +768 m | 2.16 bn |
+| 2018 | −2.1% | 1.1% | −3.2% | −44 m | 26 m | −70 m | 2.09 bn |
+| 2019 | +17.3% | 2.0% | +15.4% | +359 m | 38 m | +321 m | 2.41 bn |
+| 2020 | +34.4% | 2.6% | +31.8% | +814 m | 48 m | +766 m | 3.18 bn |
+| 2021 | +40.5% | 1.7% | +38.8% | +1,281 m | 48 m | +1,233 m | 4.41 bn |
+| 2022 | −9.2% | 0.8% | **−10.0%** | −405 m | 34 m | −439 m | 3.97 bn |
+| 2023 | +7.4% | 1.5% | +5.9% | +293 m | 57 m | +236 m | 4.21 bn |
+| 2024 | +6.4% | 1.2% | +5.2% | +270 m | 52 m | +218 m | 4.43 bn |
+| 2025 | +52.9% | 2.7% | +50.3% | +2,321 m | 96 m | +2,225 m | 6.65 bn |
+| 2026 YTD | −4.3% | 0.2% | −4.5% | −287 m | 15 m | −301 m | 6.35 bn |
+
+10-year cumulative: **1 bn → 6.35 bn = +535% net**, ~17.6% CAGR, against a benchmark CAGR of ~11.5%.
+
+Two losing years (2018, 2022) — both during VN30 bear regimes where the rules filter pulled exposure to 0.25× or 0.125× and limited the damage. 2017, 2021, and 2025 were the standout years (>+38% net each), driven respectively by the post-2016 rally, the 2021 retail boom, and the 2025 VIC mega-run.
+
+### 9. Holiday-gap NaN pollution discovered and fixed
 
 A single full-NaN row in `closes_weekly` (Tết holiday week) poisoned 26 consecutive weeks of rolling stock volatility, because `rolling(26).std()` with default `min_periods=window` returns NaN if any observation in the window is missing. Effect: `vol_adjusted_signal_weights` silently fell back to `signal_weights` during the dead zone. Fix applied across all rolling computations:
 
@@ -387,10 +431,13 @@ Each detail run produces **11 files** for the inspected strategy:
 |---|---|
 | `*_positions_weekly.csv` | Long format (`date, ticker, weight`), non-zero weights only |
 | `*_transactions.csv` | Trade blotter: `date, ticker, action, weight_prev, weight_new, delta, cost_bps, cost_abs` |
-| `*_pnl_daily.csv` | `strategy_pnl_gross, cost, strategy_pnl (net), strategy_equity, benchmark_pnl, benchmark_equity, excess_pnl, excess_equity` |
+| `*_pnl_daily.csv` | Daily PnL: gross, cost, net, equity (strategy + benchmark + excess) |
 | `*_pnl_per_position_daily.csv` | Wide: daily PnL contribution per ticker + strategy total + benchmark |
-| `*_ticker_summary.csv` | Per-ticker lifetime stats (weeks held, avg/max weight, total PnL, hit rate) |
-| `*_position_events.csv` | Per contiguous holding episode: entry, exit, duration, PnL |
+| `*_pnl_per_position.csv` | Per holding **episode**: entry, exit, duration, avg/max weight, stock return, PnL %, **PnL VND** |
+| `*_pnl_weekly_table.csv` | Per week: gross %, cost %, net %, turnover, NAV start/end, gross/cost/net **VND** |
+| `*_pnl_monthly_table.csv` | Same columns aggregated to month-end (returns compound, abs sum) |
+| `*_pnl_yearly_table.csv` | Same columns aggregated to year-end |
+| `*_ticker_summary.csv` | Per-ticker lifetime stats (weeks held, avg/max weight, PnL %, **PnL VND**, hit rate) |
 
 ### Charts
 
